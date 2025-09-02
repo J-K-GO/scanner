@@ -11,7 +11,7 @@
 #define __SCANNER_H__
 
 #include <fltKernel.h>
-#include "scanuk.h"   // ★ 공용 프로토콜(Op/Message) – 커널/유저 동일 헤더 사용
+#include "scanuk.h"   // 공용 프로토콜(Op/Message) – 커널/유저 동일 헤더 사용
 
 ///////////////////////////////////////////////////////////////////////////
 //

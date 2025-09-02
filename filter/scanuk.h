@@ -21,10 +21,10 @@ typedef struct _SCANNER_DRIVERLOAD_PAYLOAD {
     WCHAR     Path[260];
 } SCANNER_DRIVERLOAD_PAYLOAD;
 
-// ★★★ 여기가 포인트: Reserved로 정렬을 '명시적'으로 고정
+// 여기가 포인트: Reserved로 정렬을 '명시적'으로 고정
 typedef struct _SCANNER_NOTIFICATION {
     ULONG Op;
-    ULONG Reserved;  // ★ 패딩 강제 (항상 0으로 채우세요)
+    ULONG Reserved;  // 패딩 강제 (항상 0으로 채우세요)
     union {
         struct {
             ULONG BytesToScan;

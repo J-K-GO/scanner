@@ -9,7 +9,7 @@
       <Extensions>h;hpp;hxx;hm;inl;inc;xsd</Extensions>
       <UniqueIdentifier>{D08A6EDE-21C1-491E-A693-67FB47DB6E9D}</UniqueIdentifier>
     </Filter>
-    <Filter Include="Resource Files">
+    <Filter Include="Header Files\Resource Files">
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms;man;xml</Extensions>
       <UniqueIdentifier>{52F79952-01DB-4878-8287-0A8B91178B37}</UniqueIdentifier>
     </Filter>
@@ -21,14 +21,17 @@
   </ItemGroup>
   <ItemGroup>
     <ResourceCompile Include="scanUser.rc">
-      <Filter>Resource Files</Filter>
+      <Filter>Header Files\Resource Files</Filter>
     </ResourceCompile>
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="*.h;*.hpp;*.hxx;*.hm;*.inl;*.xsd">
+    <ClInclude Include="scanuser.h">
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="scanuk.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="scanner.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>

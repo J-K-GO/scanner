@@ -142,7 +142,8 @@ ScannerDisconnect(
     UNREFERENCED_PARAMETER(ConnectionCookie);
 
     ExAcquirePushLockExclusive(&ScannerData.ClientPortLock);
-    if (ScannerData.ClientPort) {
+    if (ScannerData.ClientPort)
+    {
         FltCloseClientPort(ScannerData.Filter, &ScannerData.ClientPort);
         ScannerData.ClientPort = NULL;
         ScannerData.UserProcess = NULL;
@@ -191,7 +192,7 @@ DriverEntry(
     NTSTATUS status;
     UNICODE_STRING portName;
     OBJECT_ATTRIBUTES oa;
-    PSECURITY_DESCRIPTOR sd = NULL;   // ★ 포트 보안 서술자
+    PSECURITY_DESCRIPTOR sd = NULL;   // 포트 보안 서술자
 
     // 전역 초기화
     RtlZeroMemory(&ScannerData, sizeof(ScannerData));
@@ -202,7 +203,7 @@ DriverEntry(
     status = FltRegisterFilter(DriverObject, &FilterRegistration, &ScannerData.Filter);
     if (!NT_SUCCESS(status)) goto Exit;
 
-    // ★ 모든 사용자 접근 허용 SD (테스트용; 제품은 제한 SDDL 권장)
+    // 모든 사용자 접근 허용 SD (테스트용; 제품은 제한 SDDL 권장)
     status = FltBuildDefaultSecurityDescriptor(&sd, FLT_PORT_ALL_ACCESS);
     if (!NT_SUCCESS(status)) goto ExitUnreg;
 
@@ -242,12 +243,14 @@ DriverEntry(
 ExitImgCb:
     ScannerImageLoadFini();
 ExitClosePort:
-    if (ScannerData.ServerPort) {
+    if (ScannerData.ServerPort)
+    {
         FltCloseCommunicationPort(ScannerData.ServerPort);
         ScannerData.ServerPort = NULL;
     }
 ExitUnreg:
-    if (ScannerData.Filter) {
+    if (ScannerData.Filter)
+    {
         FltUnregisterFilter(ScannerData.Filter);
         ScannerData.Filter = NULL;
     }
@@ -264,14 +267,16 @@ ScannerUnload(
 {
     UNREFERENCED_PARAMETER(Flags);
 
-    if (ScannerData.ServerPort) {
+    if (ScannerData.ServerPort)
+    {
         FltCloseCommunicationPort(ScannerData.ServerPort);
         ScannerData.ServerPort = NULL;
     }
 
     ScannerImageLoadFini();
 
-    if (ScannerData.Filter) {
+    if (ScannerData.Filter)
+    {
         FltUnregisterFilter(ScannerData.Filter);
         ScannerData.Filter = NULL;
     }
@@ -314,7 +319,7 @@ ScannerImageLoadNotify(
 NTSTATUS
 ScannerSendDriverLoadEvent(_In_ PUNICODE_STRING FullImageName, _In_ PIMAGE_INFO ImageInfo)
 {
-    SCANNER_NOTIFICATION n = { 0 };  // ✅ payload만 보냄
+    SCANNER_NOTIFICATION n = { 0 };  // payload만 보냄
     n.Op = ScannerOp_DriverLoad;
     n.Reserved = 0;                // scanuk.h에 Reserved 추가했다면 명시적으로 0
     n.U.Driver.ImageBase = (ULONGLONG)ImageInfo->ImageBase;
@@ -337,7 +342,7 @@ ScannerSendDriverLoadEvent(_In_ PUNICODE_STRING FullImageName, _In_ PIMAGE_INFO 
     ExReleasePushLockShared(&ScannerData.ClientPortLock);
     if (!client) return STATUS_PORT_DISCONNECTED;
 
-    // ✅ 헤더를 빼고 payload 크기만 보냅니다
+    // 헤더를 빼고 payload 크기만 보냅니다
     NTSTATUS st = FltSendMessage(ScannerData.Filter,
         &client,
         &n, sizeof(n),

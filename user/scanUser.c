@@ -6,7 +6,7 @@
 #include <string.h>
 #include <assert.h>
 #include <fltuser.h>
-#include "scanuk.h"   // ← 이것만 포함(중복 include 금지)
+#include "scanuk.h"
 
 
 
@@ -16,7 +16,8 @@
 
 static const UCHAR g_Foul[] = "foul";
 
-typedef struct _SCANNER_THREAD_CONTEXT {
+typedef struct _SCANNER_THREAD_CONTEXT
+{
     HANDLE Port;
     HANDLE Completion;
 } SCANNER_THREAD_CONTEXT, * PSCANNER_THREAD_CONTEXT;
@@ -63,16 +64,19 @@ DWORD WINAPI ScannerWorker(_In_ PSCANNER_THREAD_CONTEXT Ctx)
         rep.ReplyHeader.MessageId = msg->MessageHeader.MessageId;
         rep.Reply.Op = n->Op;
 
-        switch (n->Op) {
-        case ScannerOp_ScanBuffer: {
+        switch (n->Op)
+        {
+        case ScannerOp_ScanBuffer:
+        {
             BOOL foul = ScanBuffer(n->U.Scan.Contents, n->U.Scan.BytesToScan);
             rep.Reply.SafeToOpen = !foul;
             printf("Replying (ScanBuffer) SafeToOpen=%d\n", rep.Reply.SafeToOpen);
             break;
         }
-        case ScannerOp_DriverLoad: {
+        case ScannerOp_DriverLoad:
+        {
             HandleDriverLoad((SCANNER_DRIVERLOAD_PAYLOAD*)&n->U.Driver);
-            rep.Reply.SafeToOpen = TRUE; // 의미 없음
+            rep.Reply.SafeToOpen = TRUE;
             printf("Replying (DriverLoad ACK)\n");
             break;
         }
@@ -86,11 +90,7 @@ DWORD WINAPI ScannerWorker(_In_ PSCANNER_THREAD_CONTEXT Ctx)
         if (FAILED(hr)) { printf("FilterReplyMessage error=0x%08X\n", hr); break; }
 
         ZeroMemory(&msg->Ovlp, sizeof(msg->Ovlp));
-        hr = FilterGetMessage(Ctx->Port,
-            &msg->MessageHeader,
-            FIELD_OFFSET(SCANNER_MESSAGE, Ovlp),  // ★ 여기까지가 msgSize와 동일해야 함
-            &msg->Ovlp);
-
+        hr = FilterGetMessage( Ctx->Port, &msg->MessageHeader, FIELD_OFFSET(SCANNER_MESSAGE, Ovlp), &msg->Ovlp );
 
         if (hr != HRESULT_FROM_WIN32(ERROR_IO_PENDING)) break;
     }
@@ -103,12 +103,14 @@ DWORD WINAPI ScannerWorker(_In_ PSCANNER_THREAD_CONTEXT Ctx)
     return (DWORD)hr;
 }
 
+// ====== main ======
 int main(int argc, char** argv)
 {
     DWORD req = SCANNER_DEFAULT_REQUEST_COUNT;
     DWORD th = SCANNER_DEFAULT_THREAD_COUNT;
 
-    if (argc > 1) {
+    if (argc > 1)
+    {
         req = max(1, (DWORD)atoi(argv[1]));
         if (argc > 2) th = max(1, min(64, (DWORD)atoi(argv[2])));
     }
@@ -116,12 +118,8 @@ int main(int argc, char** argv)
     printf("Scanner: Connecting to the filter ...\n");
 
     HANDLE port;
-    HRESULT hr = FilterConnectCommunicationPort(ScannerPortName,
-                                    0,
-                                    NULL,
-                                    0,
-                                    NULL,
-                                    &port);
+    HRESULT hr = FilterConnectCommunicationPort( ScannerPortName, 0, NULL, 0, NULL, &port);
+
     if (IS_ERROR(hr)) { printf("Connect error=0x%08X\n", hr); return 2; }
 
     HANDLE iocp = CreateIoCompletionPort(port, NULL, 0, th);
@@ -136,18 +134,18 @@ int main(int argc, char** argv)
     SCANNER_THREAD_CONTEXT ctx = { port, iocp };
     HANDLE threads[SCANNER_MAX_THREAD_COUNT] = { 0 };
 
-    for (DWORD i = 0; i < th; ++i) {
+    for (DWORD i = 0; i < th; ++i)
+    {
         threads[i] = CreateThread(NULL, 0, (LPTHREAD_START_ROUTINE)ScannerWorker, &ctx, 0, NULL);
         if (!threads[i]) { printf("CreateThread err=%lu\n", GetLastError()); return 5; }
 
-        for (DWORD j = 0; j < req; ++j) {
+        for (DWORD j = 0; j < req; ++j)
+        {
             PSCANNER_MESSAGE m = &msgs[i * req + j];
             ZeroMemory(&m->Ovlp, sizeof(m->Ovlp));
             hr = FilterGetMessage(port, &m->MessageHeader,
                 FIELD_OFFSET(SCANNER_MESSAGE, Ovlp), &m->Ovlp);
-            if (hr != HRESULT_FROM_WIN32(ERROR_IO_PENDING)) {
-                printf("FilterGetMessage hr=0x%08X\n", hr); return 6;
-            }
+            if (hr != HRESULT_FROM_WIN32(ERROR_IO_PENDING)) { printf("FilterGetMessage hr=0x%08X\n", hr); return 6;}
         }
     }
 
