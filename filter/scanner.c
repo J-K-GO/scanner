@@ -1,33 +1,105 @@
 ﻿#include <fltKernel.h>
 #include <ntstrsafe.h>
 #include "scanuk.h"
-
-
-
 #include "scanner.h"
-
-#ifndef ScannerPortName
-#error "wrong scanuk.h is included"
-#endif
-#ifndef ScannerOp_DriverLoad
-//#error "scanuk.h is outdated"
-#endif
 
 SCANNER_DATA ScannerData;
 
-// ====== I/O callback stubs (원하면 실제 로직으로 교체) ======
+// ====== 주요 로직: PreCreate 콜백 ======
 FLT_PREOP_CALLBACK_STATUS
 ScannerPreCreate(
     _Inout_ PFLT_CALLBACK_DATA Data,
-    _In_    PCFLT_RELATED_OBJECTS FltObjects,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
     _Flt_CompletionContext_Outptr_ PVOID* CompletionContext
 )
 {
-    UNREFERENCED_PARAMETER(Data);
-    UNREFERENCED_PARAMETER(FltObjects);
     UNREFERENCED_PARAMETER(CompletionContext);
-    return FLT_PREOP_SUCCESS_NO_CALLBACK;
+
+    if (Data->Iopb->Parameters.Create.Options & FILE_DIRECTORY_FILE) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    NTSTATUS status;
+    PFLT_FILE_NAME_INFORMATION nameInfo = NULL;
+    FLT_PREOP_CALLBACK_STATUS returnStatus = FLT_PREOP_SUCCESS_NO_CALLBACK;
+    PFLT_PORT clientPort = NULL;
+    PSCANNER_NOTIFICATION notification = NULL;
+
+    status = FltGetFileNameInformation(Data, FLT_FILE_NAME_NORMALIZED | FLT_FILE_NAME_QUERY_DEFAULT, &nameInfo);
+    if (!NT_SUCCESS(status)) {
+        return FLT_PREOP_SUCCESS_NO_CALLBACK;
+    }
+
+    FltParseFileNameInformation(nameInfo);
+
+    // ✅ 변수를 한 번만 선언합니다.
+    UNICODE_STRING sysExtension = RTL_CONSTANT_STRING(L"sys");
+
+    // .sys 파일이 아니면 감지 로직을 건너뜁니다.
+    if (!RtlEqualUnicodeString(&nameInfo->Extension, &sysExtension, TRUE)) {
+        goto Cleanup;
+    }
+
+    ExAcquirePushLockShared(&ScannerData.ClientPortLock);
+    clientPort = ScannerData.ClientPort;
+    if (clientPort) {
+        ObReferenceObject(clientPort);
+    }
+    ExReleasePushLockShared(&ScannerData.ClientPortLock);
+
+    if (clientPort == NULL) {
+        goto Cleanup;
+    }
+
+    // ★★ 오류 수정: 빌드 환경에 맞춰 4-argument 버전의 함수 호출로 변경 ★★
+    notification = FltAllocatePoolAlignedWithTag(
+        FltObjects->Instance,
+        NonPagedPool,
+        sizeof(SCANNER_NOTIFICATION),
+        'nacS'
+    );
+
+    // 반환된 포인터가 NULL인지 직접 확인
+    if (notification == NULL) {
+        goto Cleanup;
+    }
+    RtlZeroMemory(notification, sizeof(SCANNER_NOTIFICATION));
+
+    notification->Op = ScannerOp_CheckDriver;
+
+    size_t pathLen = min(nameInfo->Name.Length / sizeof(WCHAR), RTL_NUMBER_OF(notification->U.Check.Path) - 1);
+    RtlCopyMemory(notification->U.Check.Path, nameInfo->Name.Buffer, pathLen * sizeof(WCHAR));
+    notification->U.Check.Path[pathLen] = L'\0';
+
+    SCANNER_REPLY reply = { 0 };
+    ULONG replyLength = sizeof(reply);
+    LARGE_INTEGER timeout;
+    timeout.QuadPart = -30 * 10000000LL;
+
+    status = FltSendMessage(ScannerData.Filter, &clientPort, notification, sizeof(SCANNER_NOTIFICATION), &reply, &replyLength, &timeout);
+
+    if (NT_SUCCESS(status) && replyLength > 0 && !reply.SafeToOpen) {
+        Data->IoStatus.Status = STATUS_ACCESS_DENIED;
+        Data->IoStatus.Information = 0;
+        returnStatus = FLT_PREOP_COMPLETE;
+    }
+
+Cleanup:
+    if (notification) {
+        FltFreePoolAlignedWithTag(FltObjects->Instance, notification, 'nacS');
+    }
+    if (nameInfo) {
+        FltReleaseFileNameInformation(nameInfo);
+    }
+    if (clientPort) {
+        ObDereferenceObject(clientPort);
+    }
+
+    return returnStatus;
 }
+
+
+// ====== 나머지 콜백 함수 정의 ======
 
 FLT_POSTOP_CALLBACK_STATUS
 ScannerPostCreate(
@@ -47,7 +119,7 @@ ScannerPostCreate(
 FLT_PREOP_CALLBACK_STATUS
 ScannerPreCleanup(
     _Inout_ PFLT_CALLBACK_DATA Data,
-    _In_    PCFLT_RELATED_OBJECTS FltObjects,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
     _Flt_CompletionContext_Outptr_ PVOID* CompletionContext
 )
 {
@@ -60,7 +132,7 @@ ScannerPreCleanup(
 FLT_PREOP_CALLBACK_STATUS
 ScannerPreWrite(
     _Inout_ PFLT_CALLBACK_DATA Data,
-    _In_    PCFLT_RELATED_OBJECTS FltObjects,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
     _Flt_CompletionContext_Outptr_ PVOID* CompletionContext
 )
 {
@@ -74,7 +146,7 @@ ScannerPreWrite(
 FLT_PREOP_CALLBACK_STATUS
 ScannerPreFileSystemControl(
     _Inout_ PFLT_CALLBACK_DATA Data,
-    _In_    PCFLT_RELATED_OBJECTS FltObjects,
+    _In_ PCFLT_RELATED_OBJECTS FltObjects,
     _Flt_CompletionContext_Outptr_ PVOID* CompletionContext
 )
 {
@@ -111,7 +183,8 @@ ScannerQueryTeardown(
     return STATUS_SUCCESS;
 }
 
-// ====== Communication callbacks ======
+
+// ====== 통신 콜백 ======
 static NTSTATUS
 ScannerConnect(
     _In_ PFLT_PORT ClientPort,
@@ -151,10 +224,8 @@ ScannerDisconnect(
     ExReleasePushLockExclusive(&ScannerData.ClientPortLock);
 }
 
-// ====== Registration tables ======
+// ====== 등록 테이블 ======
 CONST FLT_CONTEXT_REGISTRATION gContexts[] = {
-    { FLT_STREAMHANDLE_CONTEXT, 0, NULL,
-      sizeof(SCANNER_STREAM_HANDLE_CONTEXT), 'cSRS', NULL, NULL, NULL },
     { FLT_CONTEXT_END }
 };
 
@@ -167,6 +238,8 @@ CONST FLT_OPERATION_REGISTRATION gCallbacks[] = {
 #endif
     { IRP_MJ_OPERATION_END }
 };
+
+NTSTATUS ScannerUnload(_In_ FLT_FILTER_UNLOAD_FLAGS Flags);
 
 CONST FLT_REGISTRATION FilterRegistration = {
     sizeof(FLT_REGISTRATION),
@@ -192,56 +265,33 @@ DriverEntry(
     NTSTATUS status;
     UNICODE_STRING portName;
     OBJECT_ATTRIBUTES oa;
-    PSECURITY_DESCRIPTOR sd = NULL;   // 포트 보안 서술자
+    PSECURITY_DESCRIPTOR sd = NULL;
 
-    // 전역 초기화
     RtlZeroMemory(&ScannerData, sizeof(ScannerData));
     ScannerData.DriverObject = DriverObject;
     ExInitializePushLock(&ScannerData.ClientPortLock);
 
-    // 미니필터 등록
     status = FltRegisterFilter(DriverObject, &FilterRegistration, &ScannerData.Filter);
     if (!NT_SUCCESS(status)) goto Exit;
 
-    // 모든 사용자 접근 허용 SD (테스트용; 제품은 제한 SDDL 권장)
     status = FltBuildDefaultSecurityDescriptor(&sd, FLT_PORT_ALL_ACCESS);
     if (!NT_SUCCESS(status)) goto ExitUnreg;
 
-    // 포트 이름 + OA(SecurityDescriptor=sd)
     RtlInitUnicodeString(&portName, ScannerPortName);
-    InitializeObjectAttributes(&oa,
-        &portName,
-        OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE,
-        NULL,
-        sd);
+    InitializeObjectAttributes(&oa, &portName, OBJ_CASE_INSENSITIVE | OBJ_KERNEL_HANDLE, NULL, sd);
 
-    // 통신 포트 생성
-    status = FltCreateCommunicationPort(ScannerData.Filter,
-        &ScannerData.ServerPort,
-        &oa,
-        NULL,
-        ScannerConnect,
-        ScannerDisconnect,
-        NULL,
-        1);
-    // SD는 더 이상 필요 없음
+    status = FltCreateCommunicationPort(ScannerData.Filter, &ScannerData.ServerPort, &oa, NULL, ScannerConnect, ScannerDisconnect, NULL, 1);
+
     FltFreeSecurityDescriptor(sd);
     sd = NULL;
 
     if (!NT_SUCCESS(status)) goto ExitUnreg;
 
-    // 이미지 로드 콜백 등록
-    status = ScannerImageLoadInit();
-    if (!NT_SUCCESS(status)) goto ExitClosePort;
-
-    // 필터 시작
     status = FltStartFiltering(ScannerData.Filter);
-    if (!NT_SUCCESS(status)) goto ExitImgCb;
+    if (!NT_SUCCESS(status)) goto ExitClosePort;
 
     return STATUS_SUCCESS;
 
-ExitImgCb:
-    ScannerImageLoadFini();
 ExitClosePort:
     if (ScannerData.ServerPort)
     {
@@ -273,82 +323,10 @@ ScannerUnload(
         ScannerData.ServerPort = NULL;
     }
 
-    ScannerImageLoadFini();
-
     if (ScannerData.Filter)
     {
         FltUnregisterFilter(ScannerData.Filter);
         ScannerData.Filter = NULL;
     }
     return STATUS_SUCCESS;
-}
-
-// ====== Image-load (.sys) notify ======
-NTSTATUS ScannerImageLoadInit(VOID)
-{
-    NTSTATUS st = PsSetLoadImageNotifyRoutine(ScannerImageLoadNotify);
-    if (NT_SUCCESS(st)) ScannerData.ImageLoadCbRegistered = TRUE;
-    return st;
-}
-
-VOID ScannerImageLoadFini(VOID)
-{
-    if (ScannerData.ImageLoadCbRegistered) {
-        PsRemoveLoadImageNotifyRoutine(ScannerImageLoadNotify);
-        ScannerData.ImageLoadCbRegistered = FALSE;
-    }
-}
-
-VOID
-ScannerImageLoadNotify(
-    _In_opt_ PUNICODE_STRING FullImageName,
-    _In_ HANDLE ProcessId,
-    _In_ PIMAGE_INFO ImageInfo
-)
-{
-    UNREFERENCED_PARAMETER(ProcessId);
-    if (!FullImageName || !ImageInfo) return;
-    if (!ImageInfo->SystemModeImage)  return;
-
-    UNICODE_STRING ext = RTL_CONSTANT_STRING(L".sys");
-    if (!RtlSuffixUnicodeString(&ext, FullImageName, TRUE)) return;
-
-    (void)ScannerSendDriverLoadEvent(FullImageName, ImageInfo);
-}
-
-NTSTATUS
-ScannerSendDriverLoadEvent(_In_ PUNICODE_STRING FullImageName, _In_ PIMAGE_INFO ImageInfo)
-{
-    SCANNER_NOTIFICATION n = { 0 };  // payload만 보냄
-    n.Op = ScannerOp_DriverLoad;
-    n.Reserved = 0;                // scanuk.h에 Reserved 추가했다면 명시적으로 0
-    n.U.Driver.ImageBase = (ULONGLONG)ImageInfo->ImageBase;
-    n.U.Driver.ImageSize = (ULONGLONG)ImageInfo->ImageSize;
-
-    size_t cch = min((SIZE_T)(FullImageName->Length / sizeof(WCHAR)),
-        (SIZE_T)(RTL_NUMBER_OF(n.U.Driver.Path) - 1));
-    RtlStringCchCopyNW(n.U.Driver.Path,
-        RTL_NUMBER_OF(n.U.Driver.Path),
-        FullImageName->Buffer,
-        cch);
-
-    SCANNER_REPLY_MESSAGE reply = { 0 };
-    ULONG replyLen = sizeof(reply);
-
-    PFLT_PORT client = NULL;
-    ExAcquirePushLockShared(&ScannerData.ClientPortLock);
-    client = ScannerData.ClientPort;
-    if (client) ObReferenceObject(client);
-    ExReleasePushLockShared(&ScannerData.ClientPortLock);
-    if (!client) return STATUS_PORT_DISCONNECTED;
-
-    // 헤더를 빼고 payload 크기만 보냅니다
-    NTSTATUS st = FltSendMessage(ScannerData.Filter,
-        &client,
-        &n, sizeof(n),
-        &reply, &replyLen,
-        NULL);
-
-    ObDereferenceObject(client);
-    return st;
 }
